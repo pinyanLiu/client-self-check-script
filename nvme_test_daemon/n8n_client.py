@@ -63,6 +63,18 @@ class N8nClient:
         payload = {"event": "heartbeat", **health}
         return await self._post(self._settings.n8n_heartbeat_webhook_url, payload)
 
+    async def send_status(self, table_row: Dict[str, Any]) -> bool:
+        """
+        推送扁平狀態列給 n8n，供 Data Table Upsert。
+        建議 n8n 工作流：Webhook → Data Table (Upsert, 條件 machine_id)。
+        """
+        payload = {
+            "event": "machine_status",
+            "table_row": table_row,
+            **table_row,
+        }
+        return await self._post(self._settings.status_webhook_url, payload)
+
     async def send_alert(
         self,
         *,
@@ -77,4 +89,7 @@ class N8nClient:
         }
         if details:
             payload["details"] = details
+            if "table_row" in details:
+                payload["table_row"] = details["table_row"]
+                payload.update(details["table_row"])
         return await self._post(self._settings.n8n_alert_webhook_url, payload)

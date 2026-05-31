@@ -21,6 +21,7 @@ from .config import Settings
 from .disk_monitor import MockDiskMonitor, create_disk_monitor
 from .n8n_client import N8nClient
 from .state_machine import StateMachine, SystemState
+from .status_report import build_table_row
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +71,26 @@ class DaemonCore:
         except RuntimeError:
             logger.error("無法排程 abnormal 處理 (無 event loop)")
 
+    async def notify_status(
+        self,
+        event: str,
+        *,
+        alert_type: Optional[str] = None,
+        message: Optional[str] = None,
+        last_command_id: Optional[str] = None,
+        last_command_status: Optional[str] = None,
+    ) -> None:
+        """推送扁平狀態至 n8n，供 Data Table Upsert（每台機器一列）。"""
+        row = build_table_row(
+            self,
+            event=event,
+            alert_type=alert_type,
+            message=message,
+            last_command_id=last_command_id,
+            last_command_status=last_command_status,
+        )
+        await self.n8n.send_status(row)
+
     async def startup(self) -> None:
         baseline = self.disk_monitor.establish_baseline()
         if not baseline and self.settings.nvme_watch_list:
@@ -96,6 +117,7 @@ class DaemonCore:
         logger.info("Daemon 啟動完成，狀態=%s", self.state_machine.state.value)
 
         await self.n8n.send_heartbeat(await self.build_health_payload())
+        await self.notify_status("startup")
 
     async def shutdown(self) -> None:
         if self._scheduler:
@@ -121,6 +143,7 @@ class DaemonCore:
         try:
             payload = await self.build_health_payload()
             await self.n8n.send_heartbeat(payload)
+            await self.notify_status("heartbeat")
         except Exception:
             logger.exception("Heartbeat 任務失敗")
 
@@ -146,9 +169,18 @@ class DaemonCore:
             if not changed and self.state_machine.state == SystemState.ABNORMAL:
                 return
 
+            table_row = build_table_row(
+                self,
+                event="abnormal",
+                alert_type=alert_type,
+                message=message,
+                last_command_id=command_result.command_id if command_result else None,
+                last_command_status="crashed" if command_result and command_result.crashed else "",
+            )
             details: Dict[str, Any] = {
                 "state_snapshot": self.state_machine.snapshot(),
                 "disk": self.disk_monitor.health_snapshot(),
+                "table_row": table_row,
             }
             if command_result:
                 details["command"] = {
@@ -164,6 +196,7 @@ class DaemonCore:
                 message=message,
                 details=details,
             )
+            await self.n8n.send_status(table_row)
 
             if command_result:
                 await self.n8n.send_log(
@@ -182,6 +215,12 @@ class DaemonCore:
         if not self.state_machine.start_testing(command_id, pid=-1):
             logger.warning("無法進入 testing 狀態 (可能已被 abnormal 佔用)")
             return
+
+        await self.notify_status(
+            "command_start",
+            last_command_id=command_id,
+            last_command_status="running",
+        )
 
         result = await self.executor.run_command(command_id, command)
 
@@ -219,6 +258,11 @@ class DaemonCore:
             crashed=False,
             extra={"duration_sec": result.duration_sec},
         )
+        await self.notify_status(
+            "command_success",
+            last_command_id=command_id,
+            last_command_status="success",
+        )
 
     async def try_reset(self, reason: str) -> bool:
         if not self.settings.allow_manual_reset:
@@ -227,7 +271,10 @@ class DaemonCore:
             return False
         if not self.disk_monitor.refresh_baseline_if_recovered():
             return False
-        return self.state_machine.reset_from_abnormal(reason)
+        ok = self.state_machine.reset_from_abnormal(reason)
+        if ok:
+            await self.notify_status("reset", message=reason)
+        return ok
 
 
 def create_app(settings: Optional[Settings] = None) -> FastAPI:
@@ -284,8 +331,14 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 },
             )
 
-        # 立即回應，背景執行
         asyncio.create_task(core.execute_command(command_id, req.command))
+        asyncio.create_task(
+            core.notify_status(
+                "command_accepted",
+                last_command_id=command_id,
+                last_command_status="accepted",
+            )
+        )
 
         return {
             "accepted": True,

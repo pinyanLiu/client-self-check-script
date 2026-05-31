@@ -43,6 +43,15 @@ async def receive_heartbeat(request: Request) -> dict:
     return {"ok": True}
 
 
+@app.post("/status")
+async def receive_status(request: Request) -> dict:
+    """對應 n8n「狀態寫入 Data Table」Webhook。"""
+    payload = await request.json()
+    row = payload.get("table_row", payload)
+    _print_event("machine_status (Data Table row)", row)
+    return {"ok": True}
+
+
 @app.post("/alert")
 async def receive_alert(request: Request) -> dict:
     payload = await request.json()

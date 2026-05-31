@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 from dataclasses import dataclass, field
 from typing import List
 
@@ -28,6 +29,19 @@ class Settings:
     n8n_alert_webhook_url: str = field(
         default_factory=lambda: os.getenv("N8N_ALERT_WEBHOOK_URL", "")
     )
+    # 可選：專用「狀態寫入 Data Table」Webhook；未設定則與 Heartbeat 共用
+    n8n_status_webhook_url: str = field(
+        default_factory=lambda: os.getenv("N8N_STATUS_WEBHOOK_URL", "")
+    )
+
+    # 測試機識別 (Data Table Upsert 主鍵)
+    machine_id: str = field(default_factory=lambda: os.getenv("MACHINE_ID", ""))
+    machine_name: str = field(default_factory=lambda: os.getenv("MACHINE_NAME", ""))
+    machine_owner: str = field(default_factory=lambda: os.getenv("MACHINE_OWNER", ""))
+    machine_location: str = field(
+        default_factory=lambda: os.getenv("MACHINE_LOCATION", "")
+    )
+    hostname: str = field(default_factory=socket.gethostname)
 
     # HTTP API
     api_host: str = field(default_factory=lambda: os.getenv("API_HOST", "0.0.0.0"))
@@ -82,7 +96,17 @@ class Settings:
         base = cls()
         object.__setattr__(base, "nvme_watch_list", watch_list)
         object.__setattr__(base, "mock_nvme_devices", mock_devices)
+
+        machine_id = os.getenv("MACHINE_ID", "").strip() or socket.gethostname()
+        machine_name = os.getenv("MACHINE_NAME", "").strip() or machine_id
+        object.__setattr__(base, "machine_id", machine_id)
+        object.__setattr__(base, "machine_name", machine_name)
         return base
+
+    @property
+    def status_webhook_url(self) -> str:
+        """狀態回報目標：優先 N8N_STATUS_WEBHOOK_URL，否則 Heartbeat。"""
+        return self.n8n_status_webhook_url or self.n8n_heartbeat_webhook_url
 
     def validate(self) -> None:
         missing = []
