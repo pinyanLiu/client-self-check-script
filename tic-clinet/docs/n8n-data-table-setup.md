@@ -64,19 +64,52 @@ Daemon 會定期與狀態變更時，向 n8n 送出 **扁平 JSON**（`table_row
    - Method: `POST`
    - Path: 自訂，例如 `nvme-status`
    - Response: `Immediately`
-3. 節點 2：**Data Table**
+
+3. **（強烈建議）節點 2：Edit Fields（Set）— 把 `body` 攤平到根層**
+
+   n8n Webhook 收到的 JSON 在 **`body` 裡面**，不在 `$json` 根層：
+
+   ```
+   $json.body.machine_id   ✅
+   $json.machine_id        ❌（通常是 undefined）
+   ```
+
+   在 Set 節點：
+   - Mode: **Manual Mapping**
+   - 勾選 **Include Other Input Fields** 可關閉（只保留要寫表的欄位）
+   - 逐欄新增（Value 用 Expression）：
+
+   | Field | Expression |
+   |-------|------------|
+   | `machine_id` | `{{ $json.body.machine_id }}` |
+   | `machine_name` | `{{ $json.body.machine_name }}` |
+   | `state` | `{{ $json.body.state }}` |
+   | `owner` | `{{ $json.body.owner }}` |
+   | `location` | `{{ $json.body.location }}` |
+   | `hostname` | `{{ $json.body.hostname }}` |
+   | `healthy_for_idle` | `{{ $json.body.healthy_for_idle }}` |
+   | `last_event` | `{{ $json.body.last_event }}` |
+   | `last_updated_at` | `{{ $json.body.last_updated_at }}` |
+   | `nvme_current` | `{{ $json.body.nvme_current }}` |
+   | … | 其餘欄位同理，或見下方「精簡測試欄位」 |
+
+   **精簡測試**（curl 手動測時只有少數欄位）至少要有：
+   `machine_id`, `machine_name`, `state`, `last_event`
+
+4. 節點 3：**Data Table**
    - Resource: **Row**
    - Operation: **Upsert**
    - Data table: `test_machines`
-   - **Conditions**: `machine_id` **Equals** `{{ $json.machine_id }}`
-   - Mapping: **Map Automatically**（欄位名稱已對齊時最簡單）
+   - **Conditions**: 欄位 `machine_id` **Equals** `{{ $json.machine_id }}`
+     （若已做 Set 攤平，用 `$json.machine_id`；**未做 Set** 則用 `{{ $json.body.machine_id }}`）
+   - Mapping: **Map Automatically**（在 Set 之後才會成功）
 
-   若自動對應失敗，改 **Map Each Column Manually**，從 Webhook body 對應：
-   - `machine_id` ← `{{ $json.machine_id }}`
-   - `state` ← `{{ $json.state }}`
-   - …其餘欄位同理
+   **不做 Set、直接手動對應時**（Map Each Column Manually）：
+   - `machine_id` ← `{{ $json.body.machine_id }}`
+   - `state` ← `{{ $json.body.state }}`
+   - …全部加 `body.` 前綴
 
-4. 啟用 Workflow，複製 Webhook URL。
+5. 啟用 Workflow，複製 **Production** Webhook URL（`/webhook/nvme-status`，無 `-test`）。
 
 ---
 
@@ -166,11 +199,14 @@ python scripts/mock_webhook_server.py
 
 ## 常見問題
 
+**Q: Webhook 有收到資料，但 Data Table 欄位對不起來 / 是空的？**  
+A: 幾乎都是因為資料在 **`$json.body`**，不是 `$json`。請用 `{{ $json.body.machine_id }}`，或在中間加 **Set** 節點攤平後再 Upsert。
+
 **Q: 為什麼表裡一直新增多列？**  
 A: Upsert 條件未設 `machine_id`，或各機 `MACHINE_ID` 不一致。
 
 **Q: 欄位是空的？**  
-A: 檢查 Data Table 欄位名稱是否與 JSON 完全一致（區分大小寫）。
+A: 檢查 Data Table 欄位名稱是否與 JSON 完全一致（區分大小寫）；Expression 是否寫成 `body.xxx`。
 
 **Q: 多久更新一次？**  
 A: 狀態變更即時；此外每 `HEARTBEAT_INTERVAL_SEC`（預設 300 秒）更新一次。
