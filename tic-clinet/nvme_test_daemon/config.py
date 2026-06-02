@@ -35,12 +35,7 @@ class Settings:
     )
 
     # 測試機識別 (Data Table Upsert 主鍵)
-    machine_id: str = field(default_factory=lambda: os.getenv("MACHINE_ID", ""))
-    machine_name: str = field(default_factory=lambda: os.getenv("MACHINE_NAME", ""))
-    machine_owner: str = field(default_factory=lambda: os.getenv("MACHINE_OWNER", ""))
-    machine_location: str = field(
-        default_factory=lambda: os.getenv("MACHINE_LOCATION", "")
-    )
+    machine_ip: str = field(default_factory=lambda: os.getenv("MACHINE_IP", ""))
     hostname: str = field(default_factory=socket.gethostname)
 
     # HTTP API
@@ -97,10 +92,8 @@ class Settings:
         object.__setattr__(base, "nvme_watch_list", watch_list)
         object.__setattr__(base, "mock_nvme_devices", mock_devices)
 
-        machine_id = os.getenv("MACHINE_ID", "").strip() or socket.gethostname()
-        machine_name = os.getenv("MACHINE_NAME", "").strip() or machine_id
-        object.__setattr__(base, "machine_id", machine_id)
-        object.__setattr__(base, "machine_name", machine_name)
+        machine_ip = os.getenv("MACHINE_IP", "").strip()
+        object.__setattr__(base, "machine_ip", machine_ip)
         return base
 
     @property

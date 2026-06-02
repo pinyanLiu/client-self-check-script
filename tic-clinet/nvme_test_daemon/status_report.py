@@ -25,7 +25,7 @@ def build_table_row(
     """
     將 Daemon 狀態壓平成單一列，欄位名稱對應 n8n Data Table 欄位。
 
-    以 machine_id 作為 Upsert 條件欄位（每台測試機一列）。
+    以 machine_ip 作為 Upsert 條件欄位（每台測試機一列）。
     """
     sm = core.state_machine.snapshot()
     disk = core.disk_monitor.health_snapshot()
@@ -37,11 +37,8 @@ def build_table_row(
 
     return {
         # --- Upsert 主鍵 (必填，每台機器唯一) ---
-        "machine_id": settings.machine_id,
+        "machine_ip": settings.machine_ip,
         # --- 識別資訊 ---
-        "machine_name": settings.machine_name,
-        "owner": settings.machine_owner,
-        "location": settings.machine_location,
         "hostname": settings.hostname,
         # --- 運行狀態 ---
         "state": sm["state"],
