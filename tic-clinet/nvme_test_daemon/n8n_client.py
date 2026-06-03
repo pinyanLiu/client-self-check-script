@@ -44,6 +44,9 @@ class N8nClient:
         stdout: str,
         stderr: str,
         crashed: bool,
+        work_dir: Optional[str] = None,
+        debug_log_dir: Optional[str] = None,
+        log_validation: Optional[Dict[str, Any]] = None,
         extra: Optional[Dict[str, Any]] = None,
     ) -> bool:
         payload: Dict[str, Any] = {
@@ -55,6 +58,15 @@ class N8nClient:
             "stderr": stderr,
             "crashed": crashed,
         }
+        if work_dir:
+            payload["work_dir"] = work_dir
+            payload["pps2_folder"] = work_dir
+        if debug_log_dir:
+            payload["debug_log_dir"] = debug_log_dir
+        if log_validation is not None:
+            payload["log_validation"] = log_validation
+            payload["log_ok"] = log_validation.get("ok", True)
+            payload["debug_logs"] = log_validation.get("files", [])
         if extra:
             payload.update(extra)
         return await self._post(self._settings.n8n_log_webhook_url, payload)

@@ -58,6 +58,25 @@ class Settings:
         default_factory=lambda: os.getenv("COMPLETION_MARKER", "")
     )
 
+    # PPS2 工作目錄：指令於 /nvme/ 下最新 PPS2* 資料夾執行
+    nvme_work_base: str = field(
+        default_factory=lambda: os.getenv("NVME_WORK_BASE", "/nvme")
+    )
+    pps2_folder_prefix: str = field(
+        default_factory=lambda: os.getenv("PPS2_FOLDER_PREFIX", "PPS2")
+    )
+    debug_log_rel_path: str = field(
+        default_factory=lambda: os.getenv("DEBUG_LOG_REL_PATH", "app/Debug/log")
+    )
+    # 執行後必須有新增/更新的 Debug log 檔
+    require_debug_logs: bool = field(
+        default_factory=lambda: _env_bool("REQUIRE_DEBUG_LOGS", True)
+    )
+    # 單一 log 檔回傳 n8n 時的最大位元組數
+    debug_log_max_bytes: int = field(
+        default_factory=lambda: int(os.getenv("DEBUG_LOG_MAX_BYTES", "524288"))
+    )
+
     # 指定要監控的 NVMe 控制器名稱，例如 nvme0,nvme1；留空則監控所有
     nvme_watch_list: List[str] = field(default_factory=list)
 

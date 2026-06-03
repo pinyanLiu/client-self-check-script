@@ -7,11 +7,18 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional
 
 import psutil
 
 from .config import Settings
+from .debug_log import (
+    collect_logs_since,
+    snapshot_log_dir,
+    validate_debug_logs,
+)
+from .workspace import find_latest_pps2_folder, resolve_debug_log_dir
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +35,9 @@ class CommandResult:
     crash_reason: Optional[str] = None
     started_at: float = field(default_factory=time.time)
     finished_at: Optional[float] = None
+    work_dir: Optional[str] = None
+    debug_log_dir: Optional[str] = None
+    log_validation: Optional[Dict[str, Any]] = None
 
     @property
     def duration_sec(self) -> Optional[float]:
@@ -41,6 +51,14 @@ class CommandResult:
             parts.append(f"[STDOUT]\n{self.stdout}")
         if self.stderr:
             parts.append(f"[STDERR]\n{self.stderr}")
+        if self.log_validation and self.log_validation.get("files"):
+            debug_parts = []
+            for f in self.log_validation["files"]:
+                debug_parts.append(
+                    f"[{f.get('name', 'log')}]\n{f.get('content', '')}"
+                )
+            if debug_parts:
+                parts.append("[DEBUG_LOG]\n" + "\n".join(debug_parts))
         return "\n".join(parts)
 
 
@@ -58,6 +76,35 @@ class CommandExecutor:
         self._settings = settings
         self._on_crash = on_crash
 
+    def _resolve_work_dir(self) -> Path:
+        base = Path(self._settings.nvme_work_base)
+        folder = find_latest_pps2_folder(base, self._settings.pps2_folder_prefix)
+        if folder is None:
+            raise FileNotFoundError(
+                f"找不到 {self._settings.pps2_folder_prefix} 工作資料夾: {base}"
+            )
+        return folder
+
+    def _collect_debug_logs(self, result: CommandResult, log_snapshot: dict) -> None:
+        if not result.work_dir:
+            return
+        log_dir = resolve_debug_log_dir(
+            Path(result.work_dir), self._settings.debug_log_rel_path
+        )
+        result.debug_log_dir = str(log_dir)
+        entries = collect_logs_since(
+            log_dir,
+            log_snapshot,
+            started_at=result.started_at,
+            max_file_bytes=self._settings.debug_log_max_bytes,
+        )
+        validation = validate_debug_logs(
+            entries,
+            completion_marker=self._settings.completion_marker,
+            require_new_logs=self._settings.require_debug_logs,
+        )
+        result.log_validation = validation.to_dict()
+
     def _is_log_incomplete(self, result: CommandResult) -> tuple[bool, str]:
         """判斷 Log 是否不完整，作為 Crash 輔助條件。"""
         reasons: list[str] = []
@@ -65,8 +112,13 @@ class CommandExecutor:
         if result.return_code is not None and result.return_code != 0:
             reasons.append(f"return_code={result.return_code}")
 
+        if result.log_validation and not result.log_validation.get("ok", True):
+            issues = result.log_validation.get("issues") or []
+            reasons.extend(issues)
+
         marker = self._settings.completion_marker.strip()
-        if marker:
+        # 若未設定 REQUIRE_DEBUG_LOGS，仍可在 stdout/stderr 檢查標記
+        if marker and not (result.log_validation and result.log_validation.get("files")):
             combined = result.combined_log()
             if marker not in combined:
                 reasons.append(f"缺少結束標記 '{marker}'")
@@ -119,14 +171,34 @@ class CommandExecutor:
     async def run_command(self, command_id: str, command: str) -> CommandResult:
         """執行指令並回傳完整結果。"""
         result = CommandResult(command_id=command_id, command=command)
-        logger.info("開始執行指令 [%s]: %s", command_id, command)
+        try:
+            work_dir = self._resolve_work_dir()
+        except FileNotFoundError as exc:
+            result.crashed = True
+            result.crash_reason = str(exc)
+            result.finished_at = time.time()
+            logger.error("無法解析工作目錄 [%s]: %s", command_id, exc)
+            if self._on_crash:
+                self._on_crash(result)
+            return result
 
-        # 使用 shell=True 以支援 n8n 傳入的完整 shell 指令
+        result.work_dir = str(work_dir)
+        log_dir = resolve_debug_log_dir(work_dir, self._settings.debug_log_rel_path)
+        log_snapshot = snapshot_log_dir(log_dir)
+
+        logger.info(
+            "開始執行指令 [%s] cwd=%s: %s",
+            command_id,
+            work_dir,
+            command,
+        )
+
+        # 使用 shell=True 以支援 n8n 傳入的完整 shell 指令 (例如 ./NVME para1 para2)
         proc = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            cwd=os.getcwd(),
+            cwd=str(work_dir),
             env=os.environ.copy(),
         )
 
@@ -160,6 +232,8 @@ class CommandExecutor:
         result.stderr = (stderr_bytes or b"").decode(errors="replace")
         result.return_code = proc.returncode
         result.finished_at = time.time()
+
+        self._collect_debug_logs(result, log_snapshot)
 
         # 程序正常結束但仍不符合預期 Log → Crash
         if not result.crashed:

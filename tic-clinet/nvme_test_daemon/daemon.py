@@ -206,6 +206,9 @@ class DaemonCore:
                     stdout=command_result.stdout,
                     stderr=command_result.stderr,
                     crashed=True,
+                    work_dir=command_result.work_dir,
+                    debug_log_dir=command_result.debug_log_dir,
+                    log_validation=command_result.log_validation,
                     extra={"alert_type": alert_type, "message": message},
                 )
 
@@ -256,6 +259,9 @@ class DaemonCore:
             stdout=result.stdout,
             stderr=result.stderr,
             crashed=False,
+            work_dir=result.work_dir,
+            debug_log_dir=result.debug_log_dir,
+            log_validation=result.log_validation,
             extra={"duration_sec": result.duration_sec},
         )
         await self.notify_status(
