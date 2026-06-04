@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 class CommandRequest(BaseModel):
     command: str = Field(..., description="要執行的 Shell 指令")
     command_id: Optional[str] = Field(
-        default=None, description="可選的指令 ID，未提供則自動產生"
+        default=None, description="可選的指令 ID，未提供則自動產生")
+    pattern_name: Optional[str] = Field(
+        default=None, description="Pattern 名稱，用於後續尋找對應 log"
     )
 
 
@@ -202,6 +204,7 @@ class DaemonCore:
                 await self.n8n.send_log(
                     command_id=command_result.command_id,
                     status="abnormal",
+                    pattern_name=pattern_name,
                     return_code=command_result.return_code,
                     stdout=command_result.stdout,
                     stderr=command_result.stderr,
@@ -212,7 +215,7 @@ class DaemonCore:
                     extra={"alert_type": alert_type, "message": message},
                 )
 
-    async def execute_command(self, command_id: str, command: str) -> None:
+    async def execute_command(self, command_id: str, command: str, pattern_name: str) -> None:
         """背景執行指令的完整生命週期。"""
         # 佔位 PID；實際 PID 在 subprocess 建立後更新
         if not self.state_machine.start_testing(command_id, pid=-1):
@@ -225,7 +228,7 @@ class DaemonCore:
             last_command_status="running",
         )
 
-        result = await self.executor.run_command(command_id, command)
+        result = await self.executor.run_command(command_id, command, pattern_name)
 
         if result.pid and result.pid > 0:
             self.state_machine.update_pid(command_id, result.pid)
@@ -255,6 +258,7 @@ class DaemonCore:
         await self.n8n.send_log(
             command_id=command_id,
             status="success",
+            pattern_name=pattern_name,
             return_code=result.return_code,
             stdout=result.stdout,
             stderr=result.stderr,
@@ -337,7 +341,7 @@ def create_app(settings: Optional[Settings] = None) -> FastAPI:
                 },
             )
 
-        asyncio.create_task(core.execute_command(command_id, req.command))
+        asyncio.create_task(core.execute_command(command_id, req.command, req.pattern_name))
         asyncio.create_task(
             core.notify_status(
                 "command_accepted",

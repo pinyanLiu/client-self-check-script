@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 class CommandResult:
     command_id: str
     command: str
+    pattern_name: str
     return_code: Optional[int] = None
     stdout: str = ""
     stderr: str = ""
@@ -47,10 +48,6 @@ class CommandResult:
 
     def combined_log(self) -> str:
         parts = []
-        if self.stdout:
-            parts.append(f"[STDOUT]\n{self.stdout}")
-        if self.stderr:
-            parts.append(f"[STDERR]\n{self.stderr}")
         if self.log_validation and self.log_validation.get("files"):
             debug_parts = []
             for f in self.log_validation["files"]:
@@ -94,6 +91,7 @@ class CommandExecutor:
         result.debug_log_dir = str(log_dir)
         entries = collect_logs_since(
             log_dir,
+            result.pattern_name,
             log_snapshot,
             started_at=result.started_at,
             max_file_bytes=self._settings.debug_log_max_bytes,
@@ -168,9 +166,9 @@ class CommandExecutor:
                         self._on_crash(result)
                 return
 
-    async def run_command(self, command_id: str, command: str) -> CommandResult:
+    async def run_command(self, command_id: str, command: str , pattern_name: str) -> CommandResult:
         """執行指令並回傳完整結果。"""
-        result = CommandResult(command_id=command_id, command=command)
+        result = CommandResult(command_id=command_id, command=command, pattern_name=pattern_name)
         try:
             work_dir = self._resolve_work_dir()
         except FileNotFoundError as exc:
@@ -196,8 +194,8 @@ class CommandExecutor:
         # 使用 shell=True 以支援 n8n 傳入的完整 shell 指令 (例如 ./NVME para1 para2)
         proc = await asyncio.create_subprocess_shell(
             command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
             cwd=str(work_dir),
             env=os.environ.copy(),
         )
@@ -212,24 +210,24 @@ class CommandExecutor:
 
         try:
             if self._settings.command_timeout_sec > 0:
-                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                await asyncio.wait_for(
                     proc.communicate(),
                     timeout=self._settings.command_timeout_sec,
                 )
             else:
-                stdout_bytes, stderr_bytes = await proc.communicate()
+                await proc.communicate()
         except asyncio.TimeoutError:
             result.crashed = True
             result.crash_reason = (
                 f"指令逾時 ({self._settings.command_timeout_sec}s)"
             )
             proc.kill()
-            stdout_bytes, stderr_bytes = await proc.communicate()
+            await proc.communicate()
         finally:
             await monitor_task
 
-        result.stdout = (stdout_bytes or b"").decode(errors="replace")
-        result.stderr = (stderr_bytes or b"").decode(errors="replace")
+        result.stdout = ""
+        result.stderr = ""
         result.return_code = proc.returncode
         result.finished_at = time.time()
 

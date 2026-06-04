@@ -70,25 +70,62 @@ def _read_file_capped(path: Path, max_bytes: int) -> tuple[str, bool]:
 
 def collect_logs_since(
     log_dir: Path,
+    pattern_name: str,
     before: Dict[str, float],
     *,
     started_at: float,
     max_file_bytes: int,
-) -> List[LogFileEntry]:
+) -> Dict[str, List[LogFileEntry]]:
     """
     收集執行期間新增或更新的 log 檔。
-    比對：不在 before 中、mtime 晚於 started_at、或 mtime 大於 before 記錄值。
-    """
-    if not log_dir.is_dir():
-        return []
 
-    entries: List[LogFileEntry] = []
+    entries 固定分成兩類：
+    1. "pattern_name"：檔名包含 pattern_name 的 log
+    2. "DMAList"：檔名包含 "DMAList" 的 log
+
+    比對條件：
+    1. 檔案不在 before 中，或 mtime 大於 before 記錄值
+    2. mtime 晚於 started_at
+    3. 檔名必須包含 pattern_name 或 DMAList
+    4. 忽略 Pass/Fail 資料夾底下的log
+    """
+    entries: Dict[str, List[LogFileEntry]] = {
+        "pattern_name": [],
+        "DMAList": [],
+    }
+
+    if not log_dir.is_dir():
+        return entries
+
     for p in sorted(log_dir.rglob("*")):
         if not p.is_file():
             continue
+
+        # 忽略 Pass / Fail 資料夾底下的檔案
+        relative_parts = p.relative_to(log_dir).parts
+        parent_dirs = relative_parts[:-1]
+        if any(part in ("Pass", "Fail") for part in parent_dirs):
+            continue
+
+        name_lower = p.name.lower()
+        matched_keys: List[str] = []
+
+        if pattern_name and pattern_name.lower() in name_lower:
+            matched_keys.append("pattern_name")
+
+        if "DMAList" in p.name:
+            matched_keys.append("DMAList")
+
+        # 只收檔名包含 pattern_name 或 DMAList 的 log
+        if not matched_keys:
+            continue
+
         key = str(p.resolve())
+
         try:
-            mtime = p.stat().st_mtime
+            stat = p.stat()
+            mtime = stat.st_mtime
+            size = stat.st_size
         except OSError:
             continue
 
@@ -100,42 +137,57 @@ def collect_logs_since(
             continue
 
         content, truncated = _read_file_capped(p, max_file_bytes)
-        entries.append(
-            LogFileEntry(
-                path=key,
-                name=p.name,
-                size=p.stat().st_size,
-                content=content,
-                truncated=truncated,
-            )
+
+        entry = LogFileEntry(
+            path=key,
+            name=p.name,
+            size=size,
+            content=content,
+            truncated=truncated,
         )
+
+        for matched_key in matched_keys:
+            entries[matched_key].append(entry)
+
     return entries
 
 
 def validate_debug_logs(
-    entries: List[LogFileEntry],
+    entries: Dict[str, List[LogFileEntry]],
     *,
     completion_marker: str,
     require_new_logs: bool,
 ) -> LogValidation:
-    """判斷 Debug log 是否缺漏。"""
+    """
+    判斷 Debug log 是否缺漏。
+
+    只檢查 entries["pattern_name"]。
+    entries["DMAList"] 只收集，不參與驗證。
+    """
     issues: List[str] = []
 
-    if require_new_logs and not entries:
+    debug_entries = entries.get("pattern_name", [])
+    DMA_entries = entries.get("DMAList",[])
+
+    if require_new_logs and not debug_entries:
         issues.append("執行後未產生或更新任何 Debug log 檔")
 
-    for entry in entries:
+    for entry in debug_entries:
         if entry.size == 0:
             issues.append(f"log 檔為空: {entry.name}")
         elif not entry.content.strip():
             issues.append(f"log 檔無有效內容: {entry.name}")
 
     marker = (completion_marker or "").strip()
-    if marker and entries:
-        combined = "\n".join(e.content for e in entries)
+    if marker and debug_entries:
+        combined = "\n".join(e.content for e in debug_entries)
         if marker not in combined:
             issues.append(f"Debug log 中缺少結束標記 '{marker}'")
-    elif marker and not entries:
+    elif marker and not debug_entries:
         issues.append(f"無法檢查結束標記 '{marker}'（無 log 檔）")
 
-    return LogValidation(ok=not issues, issues=issues, files=entries)
+    return LogValidation(
+        ok=not issues,
+        issues=issues,
+        files=DMA_entries,
+    )

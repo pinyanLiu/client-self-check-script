@@ -39,6 +39,7 @@ class N8nClient:
         self,
         *,
         command_id: str,
+        pattern_name: str,
         status: str,
         return_code: Optional[int],
         stdout: str,
@@ -52,6 +53,7 @@ class N8nClient:
         payload: Dict[str, Any] = {
             "event": "command_result",
             "command_id": command_id,
+            "pattern_name": pattern_name,
             "status": status,
             "return_code": return_code,
             "stdout": stdout,
@@ -66,7 +68,6 @@ class N8nClient:
         if log_validation is not None:
             payload["log_validation"] = log_validation
             payload["log_ok"] = log_validation.get("ok", True)
-            payload["debug_logs"] = log_validation.get("files", [])
         if extra:
             payload.update(extra)
         return await self._post(self._settings.n8n_log_webhook_url, payload)
