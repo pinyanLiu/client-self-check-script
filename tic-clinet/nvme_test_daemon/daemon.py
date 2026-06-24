@@ -18,7 +18,8 @@ from pydantic import BaseModel, Field
 
 from .command_executor import CommandExecutor, CommandResult
 from .config import Settings
-from .disk_monitor import MockDiskMonitor, create_disk_monitor
+from .disk_monitor import MockDiskMonitor, create_disk_monitor, set_fw_naming_on_monitor
+from .fw_naming import query_fw_naming
 from .n8n_client import N8nClient
 from .state_machine import StateMachine, SystemState
 from .status_report import build_table_row
@@ -94,6 +95,24 @@ class DaemonCore:
         await self.n8n.send_status(row)
 
     async def startup(self) -> None:
+        # 在 startup 時讀取一次 FW naming，之後不再查詢
+        fw_naming = query_fw_naming()
+        if fw_naming:
+            set_fw_naming_on_monitor(self.disk_monitor, fw_naming)
+            logger.info("FW naming 讀取成功: sn=%s, mn=%s, fr=%s",
+                         fw_naming.get("sn", ""), fw_naming.get("mn", ""), fw_naming.get("fr", ""))
+        else:
+            # FR 是必要資訊；讀取失敗時報警並關閉 daemon
+            msg = "無法讀取 NVMe FW naming (fr)，請確認 nvme-cli 已安裝且 NVMe 裝置可讀"
+            logger.error(msg)
+            await self.handle_abnormal(
+                "fw_naming_error",
+                msg,
+            )
+            await self.shutdown()
+            raise RuntimeError(msg)
+            
+
         baseline = self.disk_monitor.establish_baseline()
         if not baseline and self.settings.nvme_watch_list:
             msg = f"找不到指定的 NVMe 裝置: {self.settings.nvme_watch_list}"
@@ -204,7 +223,8 @@ class DaemonCore:
                 await self.n8n.send_log(
                     command_id=command_result.command_id,
                     status="abnormal",
-                    pattern_name=pattern_name,
+                    pattern_name="",
+                    result="",
                     return_code=command_result.return_code,
                     stdout=command_result.stdout,
                     stderr=command_result.stderr,
@@ -259,6 +279,7 @@ class DaemonCore:
             command_id=command_id,
             status="success",
             pattern_name=pattern_name,
+            result=result.log_validation.get("result"),
             return_code=result.return_code,
             stdout=result.stdout,
             stderr=result.stderr,

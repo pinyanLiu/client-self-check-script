@@ -64,6 +64,7 @@ class SysfsDiskMonitor(DiskMonitorBase):
     def __init__(self, watch_list: List[str] | None = None) -> None:
         self._watch_list = watch_list or []
         self._baseline: Set[str] = set()
+        self._fw_naming: dict | None = None  # 啟動時讀一次，不重複查詢
 
         # device name -> BDF，例如 {"nvme_dev0": "0000:3d:00.0"}
         self._device_bdf_cache: dict[str, str] = {}
@@ -199,10 +200,8 @@ class SysfsDiskMonitor(DiskMonitorBase):
     def discover_devices(self) -> Set[str]:
         """
         探測目前仍然健康的裝置。
-
-        原本的方式是只看 /sys/class/nvme_interface/nvme_devX 是否存在。
-        但自訂 driver 可能在裝置掉線後仍殘留 sysfs node，
-        所以這裡改成進一步檢查背後 PCIe endpoint 是否還有回應。
+        自訂 driver 可能在裝置掉線後仍殘留 sysfs node，
+        所以這裡檢查背後 PCIe endpoint 是否還有回應。
         """
 
         # 舊邏輯：只要 sysfs node 存在就視為裝置存在。
@@ -344,7 +343,12 @@ class SysfsDiskMonitor(DiskMonitorBase):
     def health_snapshot(self) -> dict:
         """
         回傳目前健康狀態快照。
+
+        注意：這裡不觸發 FW naming 查詢。
+        FW naming 只在 daemon startup 時讀取一次（於 DaemonCore 內），
+        避免在測試運行期間對 NVMe 發 admin command 造成干擾。
         """
+
         candidates = self._list_sysfs_interface_devices()
         current = self.discover_devices()
         dropped = sorted(self._baseline - current) if self._baseline else []
@@ -373,6 +377,9 @@ class SysfsDiskMonitor(DiskMonitorBase):
                 "initial_config_header": self._initial_config_cache.get(device_name),
             }
 
+        # FW naming 不在這裡查詢，避免測試中觸發 admin command。
+        # 由 DaemonCore.startup() 在啟動時讀取一次，存入 health_snapshot。
+
         return {
             "backend": "sysfs_pci_config",
             "baseline_devices": sorted(self._baseline),
@@ -381,6 +388,7 @@ class SysfsDiskMonitor(DiskMonitorBase):
             "dropped_devices": dropped,
             "sysfs_accessible": NVME_SYSFS.is_dir(),
             "device_details": device_details,
+            "fw_naming": self._fw_naming,
         }
 
 
@@ -466,6 +474,7 @@ class MockDiskMonitor(DiskMonitorBase):
                 "current_devices": sorted(current),
                 "dropped_devices": dropped,
                 "sysfs_accessible": False,
+                "fw_naming": None,
             }
 
     def simulate_drop(self, device: str) -> bool:
@@ -504,3 +513,15 @@ def create_disk_monitor(
 
 # 向後相容別名
 DiskMonitor = SysfsDiskMonitor
+
+
+def set_fw_naming_on_monitor(monitor: DiskMonitorBase, fw: dict | None) -> None:
+    """
+    在 daemon startup 時一次性寫入 FW naming。
+    之後 heartbeat / abnormal 都不會再觸發 NVMe admin command。
+
+    同時支援 SysfsDiskMonitor 與 MockDiskMonitor。
+    """
+    if isinstance(monitor, SysfsDiskMonitor):
+        monitor._fw_naming = fw
+    # MockDiskMonitor 沒有 _fw_naming，health_snapshot 裡會自行決定

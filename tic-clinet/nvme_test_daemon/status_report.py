@@ -34,6 +34,7 @@ def build_table_row(
     baseline = disk.get("baseline_devices") or []
     current = disk.get("current_devices") or []
     dropped = disk.get("dropped_devices") or []
+    fw = disk.get("fw_naming") or {}
 
     return {
         # --- Upsert 主鍵 (必填，每台機器唯一) ---
@@ -52,6 +53,10 @@ def build_table_row(
         "nvme_current": ",".join(current),
         "nvme_dropped": ",".join(dropped),
         "sysfs_accessible": bool(disk.get("sysfs_accessible", False)),
+        # --- 碟片 FW naming ---
+        "nvme_fw_model": fw.get("mn", ""),
+        "nvme_fw_serial": fw.get("sn", ""),
+        "nvme_fw_revision": fw.get("fr", ""),
         # --- 最近事件 ---
         "last_event": event,
         "last_alert_type": alert_type or "",

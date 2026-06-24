@@ -110,7 +110,7 @@ class CommandExecutor:
         if result.return_code is not None and result.return_code != 0:
             reasons.append(f"return_code={result.return_code}")
 
-        if result.log_validation and not result.log_validation.get("ok", True):
+        if result.log_validation and result.log_validation.get("issues"):
             issues = result.log_validation.get("issues") or []
             reasons.extend(issues)
 
